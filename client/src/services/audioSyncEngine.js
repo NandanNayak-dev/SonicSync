@@ -242,8 +242,8 @@ class AudioSyncEngine {
             if (currentPosition < this.audioBuffer.duration) {
               console.log(`▶️ [AudioEngine] Starting queued play at exact caught-up position: ${currentPosition.toFixed(2)}s`);
               this.schedulePlay({
-                scheduledStartTime: nowServer + 50,
-                startPosition: currentPosition + 0.05
+                scheduledStartTime: nowServer + 150,
+                startPosition: currentPosition + 0.15
               });
             }
           }

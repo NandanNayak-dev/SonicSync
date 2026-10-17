@@ -142,6 +142,7 @@ router.get('/audio/:filename', (req, res) => {
       'Accept-Ranges': 'bytes',
       'Content-Length': chunksize,
       'Content-Type': contentType,
+      'Cache-Control': 'public, max-age=86400, immutable'
     };
     res.writeHead(206, head);
     file.pipe(res);
@@ -149,7 +150,8 @@ router.get('/audio/:filename', (req, res) => {
     const head = {
       'Content-Length': fileSize,
       'Content-Type': contentType,
-      'Accept-Ranges': 'bytes'
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'public, max-age=86400, immutable'
     };
     res.writeHead(200, head);
     fs.createReadStream(filePath).pipe(res);

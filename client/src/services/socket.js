@@ -106,8 +106,21 @@ export function startLatencyMeasurement(onLatencyUpdate) {
     runSync();
   });
 
-  // Re-synchronize every 3 seconds to eliminate thermal clock drift
-  syncInterval = setInterval(runSync, 3000);
+  // Background clock drift check every 15s (lightweight 3-sample ping keeps Wi-Fi clear for instant play commands)
+  syncInterval = setInterval(() => {
+    if (!socket.connected) return;
+    performNTPBurst(3).then((result) => {
+      if (!result) return;
+      socket.emit('room:update_latency', { latencyMs: currentLatency });
+      if (typeof onLatencyUpdate === 'function') {
+        onLatencyUpdate({
+          latencyMs: currentLatency,
+          offsetMs: clockOffset,
+          roundTripMs: result.rtt
+        });
+      }
+    });
+  }, 15000);
 
   return () => {
     if (syncInterval) clearInterval(syncInterval);

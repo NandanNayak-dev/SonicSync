@@ -84,7 +84,7 @@ export default function AudioPlayer({
         }
       });
     }
-  }, [currentTrack]);
+  }, [currentTrack?.id || currentTrack?.url]);
 
   // 3. Animated Audio Visualizer loop
   useEffect(() => {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { socket, startLatencyMeasurement } from './services/socket';
+import { socket, startLatencyMeasurement, getEstimatedServerTime } from './services/socket';
 import { audioEngine } from './services/audioSyncEngine';
 import Header from './components/Header';
 import Lobby from './components/Lobby';
@@ -226,7 +226,7 @@ export default function App() {
 
         // If song is ALREADY playing when listener joins, immediately catch up and sync!
         if (res.room.state?.isPlaying) {
-          const currentServerTime = Date.now() + latencyStats.offsetMs;
+          const currentServerTime = getEstimatedServerTime();
           const startedAt = res.room.state.playbackStartedAtServerTime || currentServerTime;
           const elapsedSec = Math.max(0, (currentServerTime - startedAt) / 1000);
           const currentPos = (res.room.state.currentTime || 0) + elapsedSec;

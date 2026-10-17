@@ -1,5 +1,7 @@
 import { roomStore } from '../roomStore.js';
 
+const lastLatencyBroadcast = new Map();
+
 export function setupRoomSocket(io) {
   io.on('connection', (socket) => {
     // 1. Create room
@@ -107,13 +109,18 @@ export function setupRoomSocket(io) {
       }
     });
 
-    // 4. Update participant's measured latency
+    // 4. Update participant's measured latency (throttled to avoid flooding multi-device clusters)
     socket.on('room:update_latency', ({ latencyMs }) => {
       const room = roomStore.updateLatency(socket.id, latencyMs);
       if (room) {
-        io.to(`room_${room.roomCode}`).emit('room:participants_updated', {
-          participants: room.participants
-        });
+        const now = Date.now();
+        const lastSent = lastLatencyBroadcast.get(room.roomCode) || 0;
+        if (now - lastSent > 6000) {
+          lastLatencyBroadcast.set(room.roomCode, now);
+          io.to(`room_${room.roomCode}`).emit('room:participants_updated', {
+            participants: room.participants
+          });
+        }
       }
     });
 
@@ -162,8 +169,9 @@ export function setupRoomSocket(io) {
         return callback && callback({ success: false, error: 'Only the host can control playback.' });
       }
 
-      // Schedule start 750ms in future for all nodes to schedule hardware clocks reliably
-      const SCHEDULE_LEAD_MS = 750;
+      // Adaptive lead time: 1000ms if all phones buffered, 1400ms if still preloading across Wi-Fi
+      const allReady = room.participants.length > 0 && room.participants.every(p => p.audioBuffered);
+      const SCHEDULE_LEAD_MS = allReady ? 1000 : 1400;
       const scheduledStartTime = Date.now() + SCHEDULE_LEAD_MS;
 
       const updatedRoom = roomStore.setPlaybackState(room.roomCode, {
@@ -173,7 +181,7 @@ export function setupRoomSocket(io) {
         playbackStartedAtServerTime: scheduledStartTime
       });
 
-      console.log(`[Playback Play] Room ${room.roomCode} scheduled for ${scheduledStartTime} (in ${SCHEDULE_LEAD_MS}ms) at pos ${position}s`);
+      console.log(`[Playback Play] Room ${room.roomCode} scheduled for ${scheduledStartTime} (in ${SCHEDULE_LEAD_MS}ms) at pos ${position}s across ${room.participants.length} nodes`);
 
       io.to(`room_${room.roomCode}`).emit('playback:start_scheduled', {
         scheduledStartTime,
@@ -222,7 +230,7 @@ export function setupRoomSocket(io) {
       let scheduledStartTime = null;
 
       if (wasPlaying) {
-        scheduledStartTime = Date.now() + 750;
+        scheduledStartTime = Date.now() + 1000;
       }
 
       const updatedRoom = roomStore.setPlaybackState(room.roomCode, {
