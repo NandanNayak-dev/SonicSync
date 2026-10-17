@@ -19,7 +19,10 @@ export default function AudioPlayer({
   currentTrack, 
   isHost, 
   roomCode, 
-  roomState 
+  roomState,
+  allBuffered = true,
+  bufferedCount = 1,
+  totalParticipants = 1
 }) {
   const [isPlaying, setIsPlaying] = useState(roomState?.isPlaying || false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -29,7 +32,9 @@ export default function AudioPlayer({
   const [driftMs, setDriftMs] = useState(0);
   const [calibrationMs, setCalibrationMs] = useState(0);
   const [showCalibration, setShowCalibration] = useState(false);
-  const [isUnlocked, setIsUnlocked] = useState(audioEngine.isUnlocked);
+  const [isUnlocked, setIsUnlocked] = useState(
+    audioEngine.isUnlocked && (!audioEngine.audioContext || audioEngine.audioContext.state === 'running')
+  );
   const [isBufferReady, setIsBufferReady] = useState(false);
 
   const visualizerCanvasRef = useRef(null);
@@ -44,6 +49,10 @@ export default function AudioPlayer({
 
     audioEngine.onDriftUpdate = (drift) => {
       setDriftMs(drift);
+    };
+
+    audioEngine.onContextStateChange = (state) => {
+      setIsUnlocked(state === 'running');
     };
 
     audioEngine.onBufferProgress = (percent, ready) => {
@@ -291,20 +300,27 @@ export default function AudioPlayer({
         </div>
 
         {/* Center: Play/Pause button */}
-        <div className="play-center">
+        <div className="play-center" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.4rem' }}>
           {isHost ? (
-            <button 
-              className={`main-play-btn ${isPlaying ? 'is-playing' : ''}`}
-              onClick={togglePlay}
-              id="btn-master-play"
-              title={isPlaying ? 'Pause across all phones' : 'Play across all phones'}
-            >
-              {isPlaying ? <Pause size={28} /> : <Play size={28} style={{ marginLeft: '4px' }} />}
-            </button>
+            <>
+              <button 
+                className={`main-play-btn ${isPlaying ? 'is-playing' : ''}`}
+                onClick={togglePlay}
+                id="btn-master-play"
+                title={isPlaying ? 'Pause across all phones' : 'Play across all phones'}
+              >
+                {isPlaying ? <Pause size={28} /> : <Play size={28} style={{ marginLeft: '4px' }} />}
+              </button>
+              {totalParticipants > 1 && (
+                <div style={{ fontSize: '0.72rem', color: allBuffered ? '#10b981' : '#f59e0b', fontWeight: '700', textAlign: 'center' }}>
+                  {allBuffered ? `🟢 Cluster Ready (${bufferedCount}/${totalParticipants} Phones)` : `⏳ Buffering (${bufferedCount}/${totalParticipants} Ready)...`}
+                </div>
+              )}
+            </>
           ) : (
             <div className="listener-play-indicator">
               <span className="live-dot" />
-              <span>{isPlaying ? 'Host Playing • Synchronized' : 'Paused by Host'}</span>
+              <span>{isPlaying ? 'Host Playing • Synchronized' : 'Speaker Armed • Awaiting Host'}</span>
             </div>
           )}
         </div>

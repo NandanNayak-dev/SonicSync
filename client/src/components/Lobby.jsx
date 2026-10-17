@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { PlusCircle, LogIn, Sparkles, Smartphone, ShieldCheck } from 'lucide-react';
 import { detectDeviceType } from '../services/socket';
+import { audioEngine } from '../services/audioSyncEngine';
 
 export default function Lobby({ onCreateRoom, onJoinRoom, initialRoomCode, isConnected }) {
   const defaultDevice = detectDeviceType();
@@ -31,6 +32,8 @@ export default function Lobby({ onCreateRoom, onJoinRoom, initialRoomCode, isCon
       setErrorMessage('Please enter your name as the Host.');
       return;
     }
+    // Unlock mobile audio permissions on direct user gesture
+    audioEngine.unlockAudio();
     setLoadingAction('create');
     onCreateRoom({
       roomName: roomName.trim() || 'BeatSync Session',
@@ -49,6 +52,8 @@ export default function Lobby({ onCreateRoom, onJoinRoom, initialRoomCode, isCon
       setErrorMessage('Please enter the 6-character Room Code.');
       return;
     }
+    // Unlock mobile audio permissions on direct user gesture
+    audioEngine.unlockAudio();
     setLoadingAction('join');
     onJoinRoom({
       roomCode: joinCode.trim().toUpperCase(),

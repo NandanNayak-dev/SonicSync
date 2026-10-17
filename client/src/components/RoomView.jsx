@@ -142,6 +142,9 @@ export default function RoomView({
         isHost={isHost}
         roomCode={roomCode}
         roomState={room?.state}
+        allBuffered={allBuffered}
+        bufferedCount={bufferedCount}
+        totalParticipants={participants.length}
       />
 
       {/* COLLABORATIVE PLAYLIST & QUEUE */}

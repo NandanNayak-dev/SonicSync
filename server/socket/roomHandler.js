@@ -162,8 +162,8 @@ export function setupRoomSocket(io) {
         return callback && callback({ success: false, error: 'Only the host can control playback.' });
       }
 
-      // Schedule start 600ms in future for all nodes to schedule timers
-      const SCHEDULE_LEAD_MS = 600;
+      // Schedule start 750ms in future for all nodes to schedule hardware clocks reliably
+      const SCHEDULE_LEAD_MS = 750;
       const scheduledStartTime = Date.now() + SCHEDULE_LEAD_MS;
 
       const updatedRoom = roomStore.setPlaybackState(room.roomCode, {
@@ -222,7 +222,7 @@ export function setupRoomSocket(io) {
       let scheduledStartTime = null;
 
       if (wasPlaying) {
-        scheduledStartTime = Date.now() + 500;
+        scheduledStartTime = Date.now() + 750;
       }
 
       const updatedRoom = roomStore.setPlaybackState(room.roomCode, {

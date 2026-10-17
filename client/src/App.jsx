@@ -223,6 +223,21 @@ export default function App() {
         if (res.room.state?.currentTrack) {
           audioEngine.loadTrack(res.room.state.currentTrack);
         }
+
+        // If song is ALREADY playing when listener joins, immediately catch up and sync!
+        if (res.room.state?.isPlaying) {
+          const currentServerTime = Date.now() + latencyStats.offsetMs;
+          const startedAt = res.room.state.playbackStartedAtServerTime || currentServerTime;
+          const elapsedSec = Math.max(0, (currentServerTime - startedAt) / 1000);
+          const currentPos = (res.room.state.currentTime || 0) + elapsedSec;
+          const leadSec = 0.2;
+
+          audioEngine.schedulePlay({
+            scheduledStartTime: currentServerTime + (leadSec * 1000),
+            startPosition: currentPos + leadSec
+          });
+        }
+
         showToast(`Connected to room ${res.room.roomCode}!`);
         window.history.replaceState({}, document.title, `?room=${res.room.roomCode}`);
         callback && callback(null);
