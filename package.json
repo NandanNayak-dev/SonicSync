@@ -1,0 +1,22 @@
+{
+  "name": "beatsync-sonicsync",
+  "version": "1.0.0",
+  "description": "BeatSync / SonicSync — Multi-phone wireless synchronized audio speaker system",
+  "scripts": {
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "dev": "node -e \"const { spawn } = require('child_process'); const opts = { stdio: 'inherit', shell: true }; spawn('npm', ['--prefix', 'server', 'run', 'dev'], opts); spawn('npm', ['--prefix', 'client', 'run', 'dev'], opts);\"",
+    "build": "npm --prefix client run build",
+    "install:all": "npm --prefix server install && npm --prefix client install"
+  },
+  "keywords": [
+    "sonicsync",
+    "beatsync",
+    "mern",
+    "socket.io",
+    "audio-sync",
+    "multi-device"
+  ],
+  "author": "Nandan",
+  "license": "ISC"
+}

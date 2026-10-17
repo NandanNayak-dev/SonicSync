@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+*/node_modules/
+package-lock.json.backup
+
+# Environment & Secrets (CRITICAL SECURITY)
+.env
+.env.local
+.env.*.local
+*.env
+server/.env
+client/.env
+
+# Allow example config
+!.env.example
+!server/.env.example
+!client/.env.example
+
+# Production Builds
+dist/
+dist-ssr/
+build/
+client/dist/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE and Editor files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Phase 2 Temporary Uploads & Audio Caches
+uploads/
+server/uploads/
+temp/
