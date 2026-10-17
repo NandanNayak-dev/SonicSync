@@ -5,16 +5,22 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import os from 'os';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import roomRoutes from './routes/roomRoutes.js';
 import { setupRoomSocket } from './socket/roomHandler.js';
 import { roomStore } from './roomStore.js';
 
 dotenv.config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const clientDistPath = path.resolve(__dirname, '../client/dist');
+
 const app = express();
 const server = http.createServer(app);
 
-// Setup Socket.IO with permissive CORS for local multi-device testing
+// Setup Socket.IO with permissive CORS
 const io = new Server(server, {
   cors: {
     origin: '*',
@@ -31,13 +37,20 @@ app.use(express.json());
 // API Routes
 app.use('/api', roomRoutes);
 
-// Root route
-app.get('/', (req, res) => {
-  res.json({
-    message: 'SonicSync / BeatSync Real-Time Audio Synchronization Server',
-    status: 'Running',
-    phase: 'Phase 1 - Room System & Real-Time Socket.IO Mesh'
-  });
+// Serve static frontend build if it exists (for production deployment e.g. on Render)
+app.use(express.static(clientDistPath));
+
+app.get('*', (req, res) => {
+  if (!req.path.startsWith('/api')) {
+    res.sendFile(path.join(clientDistPath, 'index.html'), (err) => {
+      if (err) {
+        res.json({
+          message: 'SonicSync Backend API running.',
+          hint: 'Frontend dist not found. Run npm run build in client/ to generate production bundle.'
+        });
+      }
+    });
+  }
 });
 
 // Setup Socket.IO Event Handlers

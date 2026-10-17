@@ -31,8 +31,15 @@ export default function RoomView({
   const roomCode = room?.roomCode || '';
   const roomName = room?.roomName || 'SonicSync Room';
 
-  const hostname = (lanIp && lanIp !== 'localhost') ? lanIp : window.location.hostname;
-  const port = window.location.port ? `:${window.location.port}` : '';
+  const isCloudHosted = typeof window !== 'undefined' && 
+    window.location.hostname !== 'localhost' && 
+    window.location.hostname !== '127.0.0.1';
+
+  const hostname = isCloudHosted 
+    ? window.location.hostname 
+    : ((lanIp && lanIp !== 'localhost') ? lanIp : window.location.hostname);
+    
+  const port = (window.location.port && !isCloudHosted) ? `:${window.location.port}` : '';
   const shareUrl = `${window.location.protocol}//${hostname}${port}/?room=${roomCode}`;
 
   const handleCopyCode = () => {

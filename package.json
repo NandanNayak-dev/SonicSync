@@ -2,11 +2,13 @@
   "name": "beatsync-sonicsync",
   "version": "1.0.0",
   "description": "BeatSync / SonicSync — Multi-phone wireless synchronized audio speaker system",
+  "main": "server/server.js",
   "scripts": {
+    "start": "node server/server.js",
+    "build": "npm --prefix client install && npm --prefix client run build && npm --prefix server install",
     "dev:server": "npm --prefix server run dev",
     "dev:client": "npm --prefix client run dev",
     "dev": "node -e \"const { spawn } = require('child_process'); const opts = { stdio: 'inherit', shell: true }; spawn('npm', ['--prefix', 'server', 'run', 'dev'], opts); spawn('npm', ['--prefix', 'client', 'run', 'dev'], opts);\"",
-    "build": "npm --prefix client run build",
     "install:all": "npm --prefix server install && npm --prefix client install"
   },
   "keywords": [

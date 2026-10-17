@@ -6,9 +6,17 @@ export default function QRCodeModal({ isOpen, onClose, roomCode, lanIp }) {
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [copied, setCopied] = useState(false);
 
-  // Construct mobile URL prioritizing LAN IP if available
-  const hostname = (lanIp && lanIp !== 'localhost') ? lanIp : window.location.hostname;
-  const port = window.location.port ? `:${window.location.port}` : '';
+  // Construct mobile URL: If deployed on cloud (Render/Railway), use public HTTPS origin directly.
+  // Otherwise prioritize local Wi-Fi IP for local testing.
+  const isCloudHosted = typeof window !== 'undefined' && 
+    window.location.hostname !== 'localhost' && 
+    window.location.hostname !== '127.0.0.1';
+
+  const hostname = isCloudHosted 
+    ? window.location.hostname 
+    : ((lanIp && lanIp !== 'localhost') ? lanIp : window.location.hostname);
+    
+  const port = (window.location.port && !isCloudHosted) ? `:${window.location.port}` : '';
   const joinUrl = `${window.location.protocol}//${hostname}${port}/?room=${roomCode}`;
 
   useEffect(() => {
