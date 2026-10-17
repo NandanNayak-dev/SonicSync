@@ -53,31 +53,27 @@ export default function AudioPlayer({
       }
     };
 
-    // Update duration when track loaded
-    const onLoadedMetadata = () => {
-      if (audioEngine.audioElement.duration) {
-        setDuration(audioEngine.audioElement.duration);
-      }
-    };
-    audioEngine.audioElement.addEventListener('loadedmetadata', onLoadedMetadata);
-
-    // Sync current timeline
+    // Sync current timeline directly from high-precision Web Audio clock
     const timeInterval = setInterval(() => {
       if (audioEngine.isPlaying) {
-        setCurrentTime(audioEngine.audioElement.currentTime);
+        setCurrentTime(audioEngine.getCurrentPlaybackTime());
       }
-    }, 250);
+    }, 200);
 
     return () => {
       clearInterval(timeInterval);
-      audioEngine.audioElement.removeEventListener('loadedmetadata', onLoadedMetadata);
     };
   }, []);
 
-  // 2. Load track whenever currentTrack changes
+  // 2. Load track into Web Audio RAM buffer whenever currentTrack changes
   useEffect(() => {
     if (currentTrack) {
-      audioEngine.loadTrack(currentTrack);
+      if (currentTrack.duration) setDuration(currentTrack.duration);
+      audioEngine.loadTrack(currentTrack).then(() => {
+        if (audioEngine.audioBuffer) {
+          setDuration(audioEngine.audioBuffer.duration);
+        }
+      });
     }
   }, [currentTrack]);
 

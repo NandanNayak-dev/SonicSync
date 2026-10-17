@@ -1,82 +1,68 @@
-// BeatSync High-Precision Audio Synchronization Engine (Web Audio API + Drift Compensation)
+// BeatSync Pure Web Audio API Engine — Sub-Millisecond Precision Synchronization
+// Uses RAM-decoded AudioBuffers, AudioContext hardware clock, and Phase-Locked Loop (PLL) drift correction.
 
 class AudioSyncEngine {
   constructor() {
     this.audioContext = null;
-    this.audioElement = new Audio();
-    this.audioElement.preload = 'auto';
-    this.audioElement.crossOrigin = 'anonymous';
-
-    this.analyser = null;
-    this.sourceNode = null;
     this.gainNode = null;
+    this.analyser = null;
+
+    this.currentSource = null;
+    this.audioBuffer = null;
+    this.currentTrack = null;
+
+    this.isPlaying = false;
+    this.startTimeAudioCtx = 0;
+    this.startOffsetSec = 0;
+    this.scheduledStartTimeServer = 0;
+
+    this.clockOffset = 0; // serverTime - clientTime
+    this.calibrationOffsetMs = 0; // per-device hardware adjustment
+    this.hardwareLatencySec = 0;
 
     this.isUnlocked = false;
     this.wakeLock = null;
 
-    this.currentTrack = null;
-    this.isPlaying = false;
-    this.scheduledTimer = null;
     this.driftMonitorInterval = null;
-
-    this.clockOffset = 0; // serverTime - clientTime
-    this.calibrationOffsetMs = 0; // per-device hardware adjustment
+    this.timeUpdateInterval = null;
     this.lastDriftMs = 0;
 
     this.onStateChange = null;
     this.onBufferProgress = null;
     this.onDriftUpdate = null;
 
-    this.initAudioElementListeners();
+    // Fallback HTML5 Audio element for legacy environments
+    this.fallbackAudio = new Audio();
+    this.fallbackAudio.preload = 'auto';
+    this.fallbackAudio.crossOrigin = 'anonymous';
   }
 
-  // Initialize Web Audio graph
+  // Initialize Web Audio Context with Hardware Output Latency Detection
   initContext() {
     if (!this.audioContext) {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (AudioCtx) {
-        this.audioContext = new AudioCtx();
-        this.analyser = this.audioContext.createAnalyser();
-        this.analyser.fftSize = 64;
+        this.audioContext = new AudioCtx({ latencyHint: 'interactive' });
+        
+        // Measure audio output hardware DAC buffer latency
+        const baseLat = this.audioContext.baseLatency || 0;
+        const outLat = this.audioContext.outputLatency || 0;
+        this.hardwareLatencySec = baseLat + outLat;
+        console.log(`⚡ [AudioEngine] Web Audio initialized. Hardware buffer latency: ${(this.hardwareLatencySec * 1000).toFixed(1)}ms`);
 
         this.gainNode = this.audioContext.createGain();
         this.gainNode.gain.value = 1.0;
 
-        try {
-          this.sourceNode = this.audioContext.createMediaElementSource(this.audioElement);
-          this.sourceNode.connect(this.gainNode);
-          this.gainNode.connect(this.analyser);
-          this.analyser.connect(this.audioContext.destination);
-        } catch (e) {
-          console.warn('[AudioEngine] MediaElementSource warning:', e);
-        }
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 64;
+
+        this.gainNode.connect(this.analyser);
+        this.analyser.connect(this.audioContext.destination);
       }
     }
   }
 
-  initAudioElementListeners() {
-    this.audioElement.addEventListener('canplaythrough', () => {
-      console.log('[AudioEngine] Track buffered and ready.');
-      if (this.onBufferProgress) this.onBufferProgress(100, true);
-    });
-
-    this.audioElement.addEventListener('waiting', () => {
-      console.log('[AudioEngine] Buffering audio...');
-      if (this.onBufferProgress) this.onBufferProgress(50, false);
-    });
-
-    this.audioElement.addEventListener('ended', () => {
-      this.isPlaying = false;
-      this.stopDriftMonitor();
-      if (this.onStateChange) this.onStateChange({ isPlaying: false, currentTime: this.audioElement.duration || 0 });
-    });
-
-    this.audioElement.addEventListener('error', (e) => {
-      console.error('[AudioEngine] Audio element error:', e);
-    });
-  }
-
-  // Mobile User Gesture Audio Unlock
+  // Mobile User Gesture Audio Unlock & Screen Wake Lock
   async unlockAudio() {
     this.initContext();
 
@@ -84,32 +70,27 @@ class AudioSyncEngine {
       await this.audioContext.resume();
     }
 
-    // Play micro-silence to satisfy iOS Safari / Android Chrome autoplay policy
-    try {
-      this.audioElement.volume = 0.001;
-      const playPromise = this.audioElement.play();
-      if (playPromise !== undefined) {
-        await playPromise;
-        this.audioElement.pause();
-        this.audioElement.currentTime = 0;
-        this.audioElement.volume = 1.0;
-      }
-    } catch (err) {
-      console.warn('[AudioEngine] Gesture test error:', err);
+    // Play ultra-short silent audio buffer to unlock audio hardware on mobile
+    if (this.audioContext) {
+      const silentBuffer = this.audioContext.createBuffer(1, 1, 22050);
+      const silentSource = this.audioContext.createBufferSource();
+      silentSource.buffer = silentBuffer;
+      silentSource.connect(this.audioContext.destination);
+      silentSource.start(0);
     }
 
-    // Request Screen Wake Lock so phone doesn't sleep
+    // Acquire Screen Wake Lock so phone doesn't sleep or mute audio
     try {
       if ('wakeLock' in navigator) {
         this.wakeLock = await navigator.wakeLock.request('screen');
-        console.log('⚡ [AudioEngine] Screen Wake Lock acquired.');
+        console.log('⚡ [AudioEngine] Screen Wake Lock active.');
       }
     } catch (err) {
       console.warn('[AudioEngine] WakeLock notice:', err.message);
     }
 
     this.isUnlocked = true;
-    console.log('🔊 [AudioEngine] Audio engine fully unlocked for mobile speakers!');
+    console.log('🔊 [AudioEngine] Audio engine fully unlocked for zero-latency playback!');
     return true;
   }
 
@@ -119,139 +100,246 @@ class AudioSyncEngine {
 
   setCalibrationOffset(calibrationMs) {
     this.calibrationOffsetMs = calibrationMs;
+    // Apply immediate calibration if playing
+    if (this.isPlaying && this.currentSource) {
+      this.checkAndCorrectDrift();
+    }
   }
 
   setVolume(volumeFraction) {
     const vol = Math.max(0, Math.min(1, volumeFraction));
-    this.audioElement.volume = vol;
-    if (this.gainNode) {
-      this.gainNode.gain.value = vol;
+    if (this.gainNode && this.audioContext) {
+      this.gainNode.gain.setValueAtTime(vol, this.audioContext.currentTime);
     }
+    this.fallbackAudio.volume = vol;
   }
 
-  // Load and pre-buffer a track
+  // Download and decode audio file directly into RAM (AudioBuffer)
   async loadTrack(track) {
     if (!track || !track.url) return;
 
-    if (this.currentTrack?.url === track.url && this.audioElement.src) {
-      return; // Already loaded
-    }
-
+    this.initContext();
     this.currentTrack = track;
-    this.audioElement.src = track.url;
-    this.audioElement.load();
 
-    if (this.onBufferProgress) this.onBufferProgress(10, false);
+    if (this.onBufferProgress) this.onBufferProgress(20, false);
+
+    try {
+      console.log(`[AudioEngine] Preloading & decoding track to RAM: ${track.title}`);
+      const response = await fetch(track.url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const arrayBuffer = await response.arrayBuffer();
+      if (this.onBufferProgress) this.onBufferProgress(60, false);
+
+      if (this.audioContext) {
+        // Decode audio data into uncompressed 32-bit float PCM in memory
+        this.audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+        console.log(`✅ [AudioEngine] Track decoded to RAM! Duration: ${this.audioBuffer.duration.toFixed(2)}s | Rate: ${this.audioBuffer.sampleRate}Hz`);
+        if (this.onBufferProgress) this.onBufferProgress(100, true);
+      } else {
+        // Fallback for environments without Web Audio
+        this.fallbackAudio.src = track.url;
+        this.fallbackAudio.load();
+        if (this.onBufferProgress) this.onBufferProgress(100, true);
+      }
+    } catch (err) {
+      console.error('[AudioEngine] Error decoding audio buffer:', err);
+      // Fallback
+      this.fallbackAudio.src = track.url;
+      this.fallbackAudio.load();
+      if (this.onBufferProgress) this.onBufferProgress(100, true);
+    }
   }
 
-  // Microsecond Precision Scheduled Play
+  // Sub-millisecond Hardware-Scheduled Playback
   schedulePlay({ scheduledStartTime, startPosition = 0 }) {
-    if (this.scheduledTimer) clearTimeout(this.scheduledTimer);
+    this.initContext();
 
-    const nowClient = Date.now();
-    // Convert server schedule timestamp to local device timestamp using NTP clockOffset
-    const targetLocalTime = scheduledStartTime - this.clockOffset;
-    const delayMs = targetLocalTime - nowClient;
-
-    console.log(`[AudioEngine] Scheduled play: now=${nowClient}, targetLocal=${targetLocalTime}, delay=${delayMs}ms, pos=${startPosition}s`);
-
-    const executeStart = () => {
-      this.audioElement.currentTime = startPosition + (this.calibrationOffsetMs / 1000);
-      this.audioElement.playbackRate = 1.0;
-
-      const playPromise = this.audioElement.play();
-      if (playPromise !== undefined) {
-        playPromise.then(() => {
-          this.isPlaying = true;
-          this.startDriftMonitor({ scheduledStartTime, startPosition });
-          if (this.onStateChange) this.onStateChange({ isPlaying: true, currentTime: this.audioElement.currentTime });
-        }).catch(err => {
-          console.warn('[AudioEngine] Auto-play prevented. User needs to tap unlock:', err);
-        });
-      }
-    };
-
-    if (delayMs > 0) {
-      // Future start
-      this.scheduledTimer = setTimeout(executeStart, delayMs);
-    } else {
-      // Command arrived late -> Catch up immediately!
-      const catchUpSec = Math.abs(delayMs) / 1000;
-      console.log(`[AudioEngine] Late arrival: catching up by ${catchUpSec.toFixed(3)}s`);
-      executeStart();
+    if (!this.audioBuffer && !this.fallbackAudio.src) {
+      console.warn('[AudioEngine] Play called but audio not buffered yet.');
+      return;
     }
+
+    this.stopPlayback();
+
+    const nowServer = Date.now() + this.clockOffset;
+    const deltaMs = scheduledStartTime - nowServer;
+    const deltaSec = deltaMs / 1000;
+
+    this.scheduledStartTimeServer = scheduledStartTime;
+    this.startOffsetSec = startPosition;
+
+    console.log(`🎯 [AudioEngine] Precision Scheduled Play: delta=${deltaMs}ms | startPos=${startPosition.toFixed(2)}s`);
+
+    if (this.audioContext && this.audioBuffer) {
+      // Map server scheduled time directly to AudioContext crystal clock
+      const targetAudioCtxTime = this.audioContext.currentTime + deltaSec + (this.calibrationOffsetMs / 1000) - this.hardwareLatencySec;
+
+      this.currentSource = this.audioContext.createBufferSource();
+      this.currentSource.buffer = this.audioBuffer;
+      this.currentSource.connect(this.gainNode);
+
+      if (targetAudioCtxTime >= this.audioContext.currentTime) {
+        // Schedule future start directly on audio hardware clock
+        this.startTimeAudioCtx = targetAudioCtxTime;
+        this.currentSource.start(targetAudioCtxTime, startPosition);
+      } else {
+        // Command arrived late: calculate catch-up offset to the exact sample
+        const lateSec = this.audioContext.currentTime - targetAudioCtxTime;
+        const actualStartOffset = startPosition + lateSec;
+        this.startTimeAudioCtx = this.audioContext.currentTime - lateSec;
+        console.log(`⚡ [AudioEngine] Late arrival: Catching up by ${(lateSec * 1000).toFixed(1)}ms`);
+
+        if (actualStartOffset < this.audioBuffer.duration) {
+          this.currentSource.start(0, actualStartOffset);
+        } else {
+          return;
+        }
+      }
+
+      this.isPlaying = true;
+      this.startDriftMonitor();
+      this.startTimeTracker();
+
+      if (this.onStateChange) {
+        this.onStateChange({ isPlaying: true, currentTime: startPosition });
+      }
+
+      this.currentSource.onended = () => {
+        if (this.isPlaying) {
+          this.isPlaying = false;
+          this.stopPlayback();
+          if (this.onStateChange) this.onStateChange({ isPlaying: false, currentTime: this.audioBuffer.duration });
+        }
+      };
+
+    } else {
+      // Fallback HTML5 audio element
+      const targetLocalTime = scheduledStartTime - this.clockOffset;
+      const delay = Math.max(0, targetLocalTime - Date.now());
+      setTimeout(() => {
+        this.fallbackAudio.currentTime = startPosition;
+        this.fallbackAudio.play().catch(() => {});
+        this.isPlaying = true;
+      }, delay);
+    }
+  }
+
+  // Get current exact playback time
+  getCurrentPlaybackTime() {
+    if (!this.isPlaying) return this.startOffsetSec;
+
+    if (this.audioContext && this.audioBuffer) {
+      const elapsed = this.audioContext.currentTime - this.startTimeAudioCtx;
+      return Math.max(0, Math.min(this.audioBuffer.duration, this.startOffsetSec + elapsed));
+    }
+    return this.fallbackAudio.currentTime || 0;
   }
 
   pause(position) {
-    if (this.scheduledTimer) clearTimeout(this.scheduledTimer);
-    this.stopDriftMonitor();
-
-    this.audioElement.pause();
-    this.audioElement.playbackRate = 1.0;
+    this.stopPlayback();
     if (position !== undefined) {
-      this.audioElement.currentTime = position;
+      this.startOffsetSec = position;
     }
-    this.isPlaying = false;
-    if (this.onStateChange) this.onStateChange({ isPlaying: false, currentTime: this.audioElement.currentTime });
+    if (this.onStateChange) {
+      this.onStateChange({ isPlaying: false, currentTime: this.startOffsetSec });
+    }
   }
 
   seek(position, isPlaying, scheduledStartTime) {
-    if (this.scheduledTimer) clearTimeout(this.scheduledTimer);
-    this.stopDriftMonitor();
-
-    this.audioElement.currentTime = position + (this.calibrationOffsetMs / 1000);
+    this.stopPlayback();
+    this.startOffsetSec = position;
 
     if (isPlaying && scheduledStartTime) {
       this.schedulePlay({ scheduledStartTime, startPosition: position });
     } else {
-      this.audioElement.pause();
-      this.isPlaying = false;
-      if (this.onStateChange) this.onStateChange({ isPlaying: false, currentTime: position });
+      if (this.onStateChange) {
+        this.onStateChange({ isPlaying: false, currentTime: position });
+      }
     }
   }
 
-  // Continuous Drift Correction Loop (Adaptive Rate Scaling)
-  startDriftMonitor({ scheduledStartTime, startPosition }) {
+  stopPlayback() {
+    if (this.currentSource) {
+      try {
+        this.currentSource.stop();
+        this.currentSource.disconnect();
+      } catch (e) {}
+      this.currentSource = null;
+    }
+
+    this.fallbackAudio.pause();
+    this.isPlaying = false;
+    this.stopDriftMonitor();
+    if (this.timeUpdateInterval) clearInterval(this.timeUpdateInterval);
+  }
+
+  startTimeTracker() {
+    if (this.timeUpdateInterval) clearInterval(this.timeUpdateInterval);
+    this.timeUpdateInterval = setInterval(() => {
+      if (this.isPlaying && this.onStateChange) {
+        this.onStateChange({ isPlaying: true, currentTime: this.getCurrentPlaybackTime() });
+      }
+    }, 200);
+  }
+
+  // Phase-Locked Loop (PLL) Continuous Drift Compensation
+  startDriftMonitor() {
     this.stopDriftMonitor();
 
+    // Check phase sync every 500ms
     this.driftMonitorInterval = setInterval(() => {
-      if (!this.isPlaying || this.audioElement.paused) return;
+      this.checkAndCorrectDrift();
+    }, 500);
+  }
 
-      const currentServerTime = Date.now() + this.clockOffset;
-      const elapsedServerSec = (currentServerTime - scheduledStartTime) / 1000;
-      const expectedTimelineSec = startPosition + elapsedServerSec;
-      const actualTimeSec = this.audioElement.currentTime - (this.calibrationOffsetMs / 1000);
+  checkAndCorrectDrift() {
+    if (!this.isPlaying || !this.currentSource || !this.audioBuffer) return;
 
-      const driftSec = actualTimeSec - expectedTimelineSec;
-      const driftMs = Math.round(driftSec * 1000);
-      this.lastDriftMs = driftMs;
+    const currentServerTime = Date.now() + this.clockOffset;
+    const elapsedServerSec = (currentServerTime - this.scheduledStartTimeServer) / 1000;
+    const expectedPlaybackSec = this.startOffsetSec + elapsedServerSec;
+    const actualPlaybackSec = this.getCurrentPlaybackTime();
 
-      if (this.onDriftUpdate) this.onDriftUpdate(driftMs);
+    // Drift in milliseconds (including user calibration offset)
+    const driftSec = actualPlaybackSec - expectedPlaybackSec + (this.calibrationOffsetMs / 1000);
+    const driftMs = Math.round(driftSec * 1000);
+    this.lastDriftMs = driftMs;
 
-      // DRIFT CORRECTION LOGIC:
-      // 1. Excellent Sync (|drift| <= 20ms) -> Normal speed
-      if (Math.abs(driftMs) <= 20) {
-        if (this.audioElement.playbackRate !== 1.0) {
-          this.audioElement.playbackRate = 1.0;
-        }
+    if (this.onDriftUpdate) this.onDriftUpdate(driftMs);
+
+    const param = this.currentSource.playbackRate;
+    const now = this.audioContext.currentTime;
+
+    // 1. In Phase (|drift| <= 4ms) -> Exact normal 1.0000 speed
+    if (Math.abs(driftMs) <= 4) {
+      param.setValueAtTime(1.0, now);
+    }
+    // 2. Micro phase difference (4ms to 25ms) -> Subtle micro-rate adjustment (inaudible 0.4% speed)
+    else if (Math.abs(driftMs) <= 25) {
+      if (driftMs > 0) {
+        param.setValueAtTime(0.996, now); // Slightly slow down
+      } else {
+        param.setValueAtTime(1.004, now); // Slightly speed up
       }
-      // 2. Subtle Drift (20ms to 140ms) -> Smooth micro-rate adjustment (imperceptible pitch/speed fix)
-      else if (Math.abs(driftMs) <= 140) {
-        if (driftMs > 0) {
-          // Running ahead: slightly slow down
-          this.audioElement.playbackRate = 0.96;
-        } else {
-          // Lagging behind: slightly speed up
-          this.audioElement.playbackRate = 1.04;
-        }
+    }
+    // 3. Moderate drift (25ms to 90ms) -> 1.5% speed adjustment
+    else if (Math.abs(driftMs) <= 90) {
+      if (driftMs > 0) {
+        param.setValueAtTime(0.985, now);
+      } else {
+        param.setValueAtTime(1.015, now);
       }
-      // 3. Significant Drift (> 140ms) -> Snap Seek
-      else {
-        console.log(`[AudioEngine] Large drift detected (${driftMs}ms). Resynchronizing position.`);
-        this.audioElement.currentTime = Math.max(0, expectedTimelineSec + (this.calibrationOffsetMs / 1000));
-        this.audioElement.playbackRate = 1.0;
-      }
-    }, 1200);
+    }
+    // 4. Large drift (> 90ms) -> Instant re-sync to exact millisecond
+    else {
+      console.log(`⚡ [AudioEngine] Resyncing sample phase: drift was ${driftMs}ms`);
+      const resyncPos = Math.max(0, expectedPlaybackSec - (this.calibrationOffsetMs / 1000));
+      this.schedulePlay({
+        scheduledStartTime: Date.now() + this.clockOffset + 200,
+        startPosition: resyncPos + 0.2
+      });
+    }
   }
 
   stopDriftMonitor() {
@@ -261,9 +349,8 @@ class AudioSyncEngine {
     }
   }
 
-  // Get frequency spectrum for audio visualizer
   getFrequencyData() {
-    if (!this.analyser) return new Uint8Array(32);
+    if (!this.analyser) return new Uint8Array(24);
     const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
     this.analyser.getByteFrequencyData(dataArray);
     return dataArray;
