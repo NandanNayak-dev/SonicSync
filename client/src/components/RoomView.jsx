@@ -8,12 +8,16 @@ import {
   Music, 
   Activity, 
   Radio, 
-  Sparkles, 
   Share2, 
+  Sparkles,
+  CheckCircle2,
   Volume2
 } from 'lucide-react';
 import ParticipantCard from './ParticipantCard';
 import QRCodeModal from './QRCodeModal';
+import AudioPlayer from './AudioPlayer';
+import PlaylistQueue from './PlaylistQueue';
+import UploadModal from './UploadModal';
 
 export default function RoomView({ 
   room, 
@@ -24,12 +28,18 @@ export default function RoomView({
   lanIp 
 }) {
   const [isQrOpen, setIsQrOpen] = useState(false);
+  const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
 
   const participants = room?.participants || [];
   const roomCode = room?.roomCode || '';
   const roomName = room?.roomName || 'SonicSync Room';
+  const playlist = room?.playlist || [];
+  const currentTrack = room?.state?.currentTrack || (playlist.length > 0 ? playlist[0] : null);
+
+  const bufferedCount = participants.filter(p => p.audioBuffered).length;
+  const allBuffered = participants.length > 0 && bufferedCount === participants.length;
 
   const isCloudHosted = typeof window !== 'undefined' && 
     window.location.hostname !== 'localhost' && 
@@ -67,6 +77,11 @@ export default function RoomView({
               <span className="live-dot" />
               <span>Mesh Synchronized</span>
             </div>
+            {allBuffered && (
+              <span style={{ fontSize: '0.72rem', background: 'rgba(16,185,129,0.15)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)', padding: '0.2rem 0.5rem', borderRadius: '9999px', fontWeight: '700' }}>
+                All Phones Ready ({bufferedCount}/{participants.length})
+              </span>
+            )}
           </div>
 
           <button 
@@ -82,8 +97,8 @@ export default function RoomView({
 
         <div className="room-title-area">
           <h2>{roomName}</h2>
-          <p style={{ color: '#94a3b8', fontSize: '0.9rem' }}>
-            {isHost ? 'You are leading this session. Friends can join with your QR code or Room Code.' : 'Connected as a synchronized speaker node in this cluster.'}
+          <p style={{ color: '#94a3b8', fontSize: '0.88rem' }}>
+            {isHost ? 'You control playback timeline for all phones. Friends can scan your QR code.' : 'Connected as a synchronized speaker node in this multi-device cluster.'}
           </p>
         </div>
 
@@ -121,10 +136,26 @@ export default function RoomView({
         </div>
       </div>
 
+      {/* SYNCHRONIZED AUDIO CONTROLLER */}
+      <AudioPlayer 
+        currentTrack={currentTrack}
+        isHost={isHost}
+        roomCode={roomCode}
+        roomState={room?.state}
+      />
+
+      {/* COLLABORATIVE PLAYLIST & QUEUE */}
+      <PlaylistQueue 
+        playlist={playlist}
+        currentTrack={currentTrack}
+        isHost={isHost}
+        onOpenUploadModal={() => setIsUploadOpen(true)}
+      />
+
       {/* Real-time Telemetry & Sync Health */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
         gap: '0.85rem'
       }}>
         <div className="participant-card">
@@ -189,26 +220,19 @@ export default function RoomView({
         </div>
       </div>
 
-      {/* Phase 2 Feature Preview */}
-      <div className="phase-preview-card">
-        <div className="preview-icon">
-          🎵
-        </div>
-        <div className="preview-text">
-          <h4>Phase 1 Milestone Complete: Real-Time Room & Socket Mesh</h4>
-          <p>
-            Your phones are connected to the central Socket.IO room hub with millisecond latency telemetry.
-            In <strong>Phase 2</strong>, we will implement audio upload and synchronized local audio caching so every phone streams the exact same track!
-          </p>
-        </div>
-      </div>
-
       {/* QR Code Modal */}
       <QRCodeModal 
         isOpen={isQrOpen} 
         onClose={() => setIsQrOpen(false)} 
         roomCode={roomCode}
         lanIp={lanIp}
+      />
+
+      {/* Upload Track Modal */}
+      <UploadModal 
+        isOpen={isUploadOpen}
+        onClose={() => setIsUploadOpen(false)}
+        roomCode={roomCode}
       />
     </div>
   );

@@ -10,12 +10,18 @@ import { fileURLToPath } from 'url';
 import roomRoutes from './routes/roomRoutes.js';
 import { setupRoomSocket } from './socket/roomHandler.js';
 import { roomStore } from './roomStore.js';
+import { ensurePresetTracks } from './audioGenerator.js';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const uploadDir = path.resolve(__dirname, 'uploads');
 const clientDistPath = path.resolve(__dirname, '../client/dist');
+
+// Generate / ensure preset audio tracks on boot
+const presetTracks = ensurePresetTracks(uploadDir);
+roomStore.setPresetTracks(presetTracks);
 
 const app = express();
 const server = http.createServer(app);
@@ -45,7 +51,7 @@ app.get('*', (req, res) => {
     res.sendFile(path.join(clientDistPath, 'index.html'), (err) => {
       if (err) {
         res.json({
-          message: 'SonicSync Backend API running.',
+          message: 'SonicSync / BeatSync Backend API running.',
           hint: 'Frontend dist not found. Run npm run build in client/ to generate production bundle.'
         });
       }
@@ -56,19 +62,27 @@ app.get('*', (req, res) => {
 // Setup Socket.IO Event Handlers
 setupRoomSocket(io);
 
-// Optional MongoDB Connection (Non-blocking fallback to in-memory)
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/sonicsync';
+// MongoDB Atlas Connection (with automatic non-blocking fallback)
+const rawMongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/sonicsync';
 
 async function connectMongo() {
+  if (rawMongoUri.includes('<db_username>')) {
+    console.log('ℹ️  [MongoDB Atlas] Notice: <db_username> placeholder detected in server/.env.');
+    console.log('👉 To persist rooms to Atlas, replace <db_username> with your Atlas database username.');
+    console.log('⚡ Running smoothly with ultra-fast In-Memory room caching in the meantime!\n');
+    roomStore.setMongoConnected(false);
+    return;
+  }
+
   try {
-    // 2-second timeout so it never stalls if Mongo is not running locally
-    await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 2000
+    await mongoose.connect(rawMongoUri, {
+      serverSelectionTimeoutMS: 3000
     });
-    console.log('✅ [MongoDB] Connected successfully to database');
+    console.log('✅ [MongoDB Atlas] Connected successfully to cloud database!');
     roomStore.setMongoConnected(true);
   } catch (err) {
-    console.log('ℹ️  [MongoDB] Not detected locally or offline. Running seamlessly in high-speed In-Memory mode!');
+    console.log('ℹ️  [MongoDB] Connection notice:', err.message);
+    console.log('⚡ Running smoothly with ultra-fast In-Memory room caching!\n');
     roomStore.setMongoConnected(false);
   }
 }
@@ -100,9 +114,10 @@ const localIp = getLocalIp();
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n=================================================`);
-  console.log(`🚀 SonicSync Backend running on port ${PORT}`);
-  console.log(`📡 Local Server URL:   http://localhost:${PORT}`);
-  console.log(`📱 LAN / Mobile URL:   http://${localIp}:${PORT}`);
-  console.log(`⚡ Ready for Phase 1 Room System & Sockets`);
+  console.log(`🚀 BeatSync (SonicSync) Full Server Running`);
+  console.log(`📡 Local URL:          http://localhost:${PORT}`);
+  console.log(`📱 LAN / Mobile URL:    http://${localIp}:${PORT}`);
+  console.log(`🎵 Preset Tracks:      ${presetTracks.length} ready in /uploads`);
+  console.log(`⚡ Synchronization:    Microsecond Precision Scheduler`);
   console.log(`=================================================\n`);
 });

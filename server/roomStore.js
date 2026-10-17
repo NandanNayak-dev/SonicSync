@@ -1,4 +1,3 @@
-// Hybrid In-Memory & MongoDB room store for high performance and zero-config local testing
 import { Room } from './models/Room.js';
 
 class RoomStore {
@@ -6,20 +5,23 @@ class RoomStore {
     this.rooms = new Map(); // roomCode -> room object
     this.socketToRoom = new Map(); // socketId -> roomCode
     this.isMongoConnected = false;
+    this.presetTracks = [];
   }
 
   setMongoConnected(connected) {
     this.isMongoConnected = connected;
   }
 
-  // Generate clean, readable 6-character room code (e.g., SYNC42, BEAT88)
+  setPresetTracks(tracks) {
+    this.presetTracks = tracks;
+  }
+
   generateRoomCode() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Exclude ambiguous chars like I, 1, O, 0
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let code = '';
     for (let i = 0; i < 6; i++) {
       code += chars.charAt(Math.floor(Math.random() * chars.length));
     }
-    // Ensure uniqueness
     if (this.rooms.has(code)) {
       return this.generateRoomCode();
     }
@@ -35,8 +37,13 @@ class RoomStore {
       isHost: true,
       joinedAt: new Date().toISOString(),
       latencyMs: 0,
-      ready: true
+      ready: true,
+      audioBuffered: false,
+      hardwareCalibrationMs: 0
     };
+
+    const initialPlaylist = [...this.presetTracks];
+    const initialTrack = initialPlaylist.length > 0 ? initialPlaylist[0] : null;
 
     const room = {
       roomCode,
@@ -44,11 +51,13 @@ class RoomStore {
       hostSocketId,
       hostName: hostName || 'Host',
       participants: [hostParticipant],
+      playlist: initialPlaylist,
       state: {
         isPlaying: false,
         currentTime: 0,
-        currentTrack: null,
-        playbackStartedAtServerTime: null
+        currentTrack: initialTrack,
+        playbackStartedAtServerTime: null,
+        scheduledStartTime: null
       },
       createdAt: new Date().toISOString()
     };
@@ -56,7 +65,6 @@ class RoomStore {
     this.rooms.set(roomCode, room);
     this.socketToRoom.set(hostSocketId, roomCode);
 
-    // Async save to MongoDB if connected
     if (this.isMongoConnected) {
       Room.create(room).catch(err => console.warn('[MongoDB] Room save warning:', err.message));
     }
@@ -80,7 +88,6 @@ class RoomStore {
     const room = this.rooms.get(code);
     if (!room) return null;
 
-    // Check if participant already exists by socketId
     const existingIndex = room.participants.findIndex(p => p.socketId === socketId);
     const participant = {
       socketId,
@@ -89,7 +96,9 @@ class RoomStore {
       isHost: false,
       joinedAt: new Date().toISOString(),
       latencyMs: 0,
-      ready: true
+      ready: true,
+      audioBuffered: false,
+      hardwareCalibrationMs: 0
     };
 
     if (existingIndex >= 0) {
@@ -119,6 +128,100 @@ class RoomStore {
     return room;
   }
 
+  setParticipantBuffered(socketId, audioBuffered) {
+    const room = this.getRoomBySocketId(socketId);
+    if (!room) return null;
+
+    const participant = room.participants.find(p => p.socketId === socketId);
+    if (participant) {
+      participant.audioBuffered = Boolean(audioBuffered);
+    }
+    return room;
+  }
+
+  setParticipantCalibration(socketId, calibrationMs) {
+    const room = this.getRoomBySocketId(socketId);
+    if (!room) return null;
+
+    const participant = room.participants.find(p => p.socketId === socketId);
+    if (participant) {
+      participant.hardwareCalibrationMs = Number(calibrationMs) || 0;
+    }
+    return room;
+  }
+
+  loadTrack(roomCode, track) {
+    const room = this.getRoom(roomCode);
+    if (!room) return null;
+
+    room.state.currentTrack = track;
+    room.state.currentTime = 0;
+    room.state.isPlaying = false;
+    room.state.playbackStartedAtServerTime = null;
+    room.state.scheduledStartTime = null;
+
+    // Reset buffer readiness for all participants so they can re-buffer
+    room.participants.forEach(p => {
+      p.audioBuffered = false;
+    });
+
+    if (this.isMongoConnected) {
+      Room.updateOne(
+        { roomCode: room.roomCode },
+        { 
+          $set: { 
+            'state.currentTrack': track,
+            'state.currentTime': 0,
+            'state.isPlaying': false,
+            participants: room.participants
+          } 
+        }
+      ).catch(() => {});
+    }
+
+    return room;
+  }
+
+  addTrackToPlaylist(roomCode, track) {
+    const room = this.getRoom(roomCode);
+    if (!room) return null;
+
+    room.playlist.push(track);
+
+    // If no track currently loaded, load this one
+    if (!room.state.currentTrack) {
+      room.state.currentTrack = track;
+    }
+
+    if (this.isMongoConnected) {
+      Room.updateOne(
+        { roomCode: room.roomCode },
+        { $set: { playlist: room.playlist, 'state.currentTrack': room.state.currentTrack } }
+      ).catch(() => {});
+    }
+
+    return room;
+  }
+
+  setPlaybackState(roomCode, { isPlaying, currentTime, scheduledStartTime, playbackStartedAtServerTime }) {
+    const room = this.getRoom(roomCode);
+    if (!room) return null;
+
+    if (isPlaying !== undefined) room.state.isPlaying = Boolean(isPlaying);
+    if (currentTime !== undefined) room.state.currentTime = Number(currentTime);
+    if (scheduledStartTime !== undefined) room.state.scheduledStartTime = scheduledStartTime;
+    if (playbackStartedAtServerTime !== undefined) room.state.playbackStartedAtServerTime = playbackStartedAtServerTime;
+
+    if (this.isMongoConnected) {
+      Room.updateOne(
+        { roomCode: room.roomCode },
+        { $set: { state: room.state } }
+      ).catch(() => {});
+    }
+
+    return room;
+  }
+
   removeParticipantBySocketId(socketId) {
     const roomCode = this.socketToRoom.get(socketId);
     if (!roomCode) return null;
@@ -133,7 +236,6 @@ class RoomStore {
     let hostChanged = false;
     let newHost = null;
 
-    // If host left and there are other participants, promote the first one to host
     if (room.hostSocketId === socketId) {
       if (room.participants.length > 0) {
         room.participants[0].isHost = true;
@@ -142,7 +244,6 @@ class RoomStore {
         hostChanged = true;
         newHost = room.participants[0];
       } else {
-        // Room is empty, delete it
         this.rooms.delete(roomCode);
         if (this.isMongoConnected) {
           Room.deleteOne({ roomCode }).catch(() => {});

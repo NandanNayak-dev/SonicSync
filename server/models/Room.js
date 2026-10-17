@@ -7,7 +7,19 @@ const participantSchema = new mongoose.Schema({
   isHost: { type: Boolean, default: false },
   joinedAt: { type: Date, default: Date.now },
   latencyMs: { type: Number, default: 0 },
-  ready: { type: Boolean, default: true }
+  ready: { type: Boolean, default: true },
+  audioBuffered: { type: Boolean, default: false },
+  hardwareCalibrationMs: { type: Number, default: 0 }
+});
+
+const trackSchema = new mongoose.Schema({
+  id: { type: String, required: true },
+  title: { type: String, required: true },
+  artist: { type: String, default: 'BeatSync Artist' },
+  url: { type: String, required: true },
+  duration: { type: Number, default: 0 },
+  addedBy: { type: String, default: 'Host' },
+  addedAt: { type: Date, default: Date.now }
 });
 
 const roomSchema = new mongoose.Schema({
@@ -33,13 +45,13 @@ const roomSchema = new mongoose.Schema({
     required: true 
   },
   participants: [participantSchema],
+  playlist: [trackSchema],
   state: {
     isPlaying: { type: Boolean, default: false },
     currentTime: { type: Number, default: 0 },
     currentTrack: {
-      title: { type: String, default: null },
-      url: { type: String, default: null },
-      duration: { type: Number, default: 0 }
+      type: trackSchema,
+      default: null
     },
     playbackStartedAtServerTime: { type: Number, default: null }
   },

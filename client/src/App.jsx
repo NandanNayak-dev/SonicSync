@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { socket, startLatencyMeasurement } from './services/socket';
+import { audioEngine } from './services/audioSyncEngine';
 import Header from './components/Header';
 import Lobby from './components/Lobby';
 import RoomView from './components/RoomView';
@@ -14,7 +15,6 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState(null);
   const [urlRoomCode, setUrlRoomCode] = useState('');
 
-  // Show auto-dismissing toast notifications
   const showToast = (msg) => {
     setToastMessage(msg);
     setTimeout(() => {
@@ -22,7 +22,7 @@ export default function App() {
     }, 3500);
   };
 
-  // 1. Fetch LAN network info on mount for multi-phone QR connection
+  // 1. Fetch LAN network info on mount
   useEffect(() => {
     fetch('/api/network-info')
       .then(res => res.json())
@@ -35,7 +35,6 @@ export default function App() {
         console.warn('Network info endpoint unreachable; defaulting to window location.', err);
       });
 
-    // Check if URL has ?room=CODE from a QR scan or link
     const params = new URLSearchParams(window.location.search);
     const roomParam = params.get('room');
     if (roomParam) {
@@ -43,7 +42,7 @@ export default function App() {
     }
   }, []);
 
-  // 2. Setup Socket.IO lifecycle listeners
+  // 2. Setup Socket.IO & Playback lifecycle listeners
   useEffect(() => {
     function onConnect() {
       setIsConnected(true);
@@ -56,7 +55,6 @@ export default function App() {
     }
 
     function onParticipantJoined(data) {
-      console.log('[Socket] Participant joined:', data);
       if (data?.room) {
         setCurrentRoom(data.room);
         showToast(`🎉 ${data.participant?.name || 'A new phone'} joined the session!`);
@@ -64,7 +62,6 @@ export default function App() {
     }
 
     function onParticipantLeft(data) {
-      console.log('[Socket] Participant left:', data);
       if (data?.room) {
         setCurrentRoom(data.room);
         showToast(`👋 ${data.participantName || 'A listener'} left the room.`);
@@ -83,9 +80,79 @@ export default function App() {
 
     function onRoomClosed(data) {
       showToast(`⚠️ ${data?.message || 'Room was closed.'}`);
+      audioEngine.pause();
       setCurrentRoom(null);
       setIsHost(false);
       window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    // Playback Synchronization Events
+    function onTrackChanged(data) {
+      console.log('[Socket] Track changed:', data);
+      if (data?.track) {
+        audioEngine.loadTrack(data.track);
+        setCurrentRoom(prev => prev ? { 
+          ...prev, 
+          state: { 
+            ...prev.state, 
+            currentTrack: data.track, 
+            isPlaying: false, 
+            currentTime: 0 
+          } 
+        } : null);
+        showToast(`🎵 Loaded: ${data.track.title}`);
+      }
+    }
+
+    function onStartScheduled(data) {
+      console.log('[Socket] Playback scheduled start:', data);
+      audioEngine.schedulePlay({
+        scheduledStartTime: data.scheduledStartTime,
+        startPosition: data.position || 0
+      });
+
+      setCurrentRoom(prev => prev ? {
+        ...prev,
+        state: {
+          ...prev.state,
+          isPlaying: true,
+          scheduledStartTime: data.scheduledStartTime
+        }
+      } : null);
+    }
+
+    function onPaused(data) {
+      console.log('[Socket] Playback paused:', data);
+      audioEngine.pause(data.position);
+      setCurrentRoom(prev => prev ? {
+        ...prev,
+        state: {
+          ...prev.state,
+          isPlaying: false,
+          currentTime: data.position
+        }
+      } : null);
+    }
+
+    function onSeeked(data) {
+      console.log('[Socket] Playback seeked:', data);
+      audioEngine.seek(data.position, data.isPlaying, data.scheduledStartTime);
+      setCurrentRoom(prev => prev ? {
+        ...prev,
+        state: {
+          ...prev.state,
+          currentTime: data.position,
+          isPlaying: Boolean(data.isPlaying)
+        }
+      } : null);
+    }
+
+    function onPlaylistUpdated(data) {
+      console.log('[Socket] Playlist updated:', data);
+      if (data?.playlist) {
+        setCurrentRoom(prev => prev ? { ...prev, playlist: data.playlist } : null);
+        showToast('🎶 Playlist updated');
+      }
     }
 
     socket.on('connect', onConnect);
@@ -95,13 +162,20 @@ export default function App() {
     socket.on('room:participants_updated', onParticipantsUpdated);
     socket.on('room:closed', onRoomClosed);
 
+    socket.on('playback:track_changed', onTrackChanged);
+    socket.on('playback:start_scheduled', onStartScheduled);
+    socket.on('playback:paused', onPaused);
+    socket.on('playback:seeked', onSeeked);
+    socket.on('playback:playlist_updated', onPlaylistUpdated);
+
     if (socket.connected) {
       setIsConnected(true);
     }
 
-    // Start NTP latency measurement
+    // High-Precision NTP Latency & Clock Synchronization Loop
     const stopLatency = startLatencyMeasurement((stats) => {
       setLatencyStats(stats);
+      audioEngine.setClockOffset(stats.offsetMs);
     });
 
     return () => {
@@ -111,6 +185,13 @@ export default function App() {
       socket.off('room:participant_left', onParticipantLeft);
       socket.off('room:participants_updated', onParticipantsUpdated);
       socket.off('room:closed', onRoomClosed);
+
+      socket.off('playback:track_changed', onTrackChanged);
+      socket.off('playback:start_scheduled', onStartScheduled);
+      socket.off('playback:paused', onPaused);
+      socket.off('playback:seeked', onSeeked);
+      socket.off('playback:playlist_updated', onPlaylistUpdated);
+
       stopLatency();
     };
   }, []);
@@ -121,8 +202,10 @@ export default function App() {
       if (res?.success) {
         setCurrentRoom(res.room);
         setIsHost(true);
+        if (res.room.state?.currentTrack) {
+          audioEngine.loadTrack(res.room.state.currentTrack);
+        }
         showToast(`Room ${res.room.roomCode} created! Share the code with friends.`);
-        // Update URL query param cleanly without reload
         window.history.replaceState({}, document.title, `?room=${res.room.roomCode}`);
         callback && callback(null);
       } else {
@@ -137,6 +220,9 @@ export default function App() {
       if (res?.success) {
         setCurrentRoom(res.room);
         setIsHost(res.isHost || false);
+        if (res.room.state?.currentTrack) {
+          audioEngine.loadTrack(res.room.state.currentTrack);
+        }
         showToast(`Connected to room ${res.room.roomCode}!`);
         window.history.replaceState({}, document.title, `?room=${res.room.roomCode}`);
         callback && callback(null);
@@ -148,6 +234,7 @@ export default function App() {
 
   // Handler: Leave room
   const handleLeaveRoom = () => {
+    audioEngine.pause();
     socket.emit('room:leave', () => {
       setCurrentRoom(null);
       setIsHost(false);
